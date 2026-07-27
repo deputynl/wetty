@@ -128,42 +128,11 @@ styleTerminalFrame(termFrame);
 // ttyd's bundled frontend. That's the officially supported way to set it;
 // there's no other reach-in point since ttyd's Terminal instance isn't
 // exposed on the iframe's window.
-const FONT_SIZE_KEY = 'wetty.terminalFontSize';
-const FONT_SIZE_MIN = 10;
-const FONT_SIZE_MAX = 28;
 const FONT_SIZE_DEFAULT = 12;
-const FONT_SIZE_STEP = 2;
-
-function getFontSize() {
-  const stored = parseInt(localStorage.getItem(FONT_SIZE_KEY), 10);
-  if (Number.isNaN(stored)) return FONT_SIZE_DEFAULT;
-  return Math.min(FONT_SIZE_MAX, Math.max(FONT_SIZE_MIN, stored));
-}
 
 function terminalUrl() {
-  return `/term/?fontSize=${getFontSize()}`;
+  return `/term/?fontSize=${FONT_SIZE_DEFAULT}`;
 }
-
-function updateFontSizeDisplay() {
-  const size = getFontSize();
-  document.getElementById('font-size-value').textContent = size;
-  document.getElementById('font-size-dec').disabled = size <= FONT_SIZE_MIN;
-  document.getElementById('font-size-inc').disabled = size >= FONT_SIZE_MAX;
-}
-
-function setFontSize(size) {
-  localStorage.setItem(FONT_SIZE_KEY, String(Math.min(FONT_SIZE_MAX, Math.max(FONT_SIZE_MIN, size))));
-  updateFontSizeDisplay();
-
-  // Reload the terminal iframe so the new size takes effect immediately -
-  // ttyd's backing tmux session is persistent, so this just reconnects the
-  // websocket and redraws, no session/scrollback loss.
-  if (termFrame.src) termFrame.src = terminalUrl();
-}
-
-document.getElementById('font-size-dec').addEventListener('click', () => setFontSize(getFontSize() - FONT_SIZE_STEP));
-document.getElementById('font-size-inc').addEventListener('click', () => setFontSize(getFontSize() + FONT_SIZE_STEP));
-updateFontSizeDisplay();
 
 // Kick off (or reattach to) the tmux/ssh session, then point the iframe at it.
 (async function start() {
