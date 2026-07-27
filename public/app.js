@@ -167,6 +167,8 @@ updateFontSizeDisplay();
 
 // Kick off (or reattach to) the tmux/ssh session, then point the iframe at it.
 (async function start() {
-  await fetch('/api/session/start', { method: 'POST' });
+  const res = await fetch('/api/session/start', { method: 'POST' });
+  const data = await res.json().catch(() => ({}));
+  if (data.machineName) document.title = `${data.machineName} — wetty`;
   termFrame.src = terminalUrl();
 })();

@@ -1,5 +1,6 @@
 const { spawn } = require('child_process');
 const net = require('net');
+const dns = require('dns');
 
 const TTYD_PORT = parseInt(process.env.TTYD_PORT || '7681', 10);
 
@@ -17,6 +18,30 @@ const RECONNECT_SCRIPT = `while true; do
 done`;
 
 let session = null; // { proc }
+
+// SSH_HOST is often an IP in homelab setups; PTR-resolve it to a real
+// hostname for display (e.g. the browser tab) so the tab reads "nas" rather
+// than "192.168.1.50". Falls back to SSH_HOST itself - unchanged if it's
+// already a hostname, or if there's no PTR record for the IP. Cached since
+// it won't change for the life of the process and a missing PTR record
+// would otherwise mean a fresh (slow) DNS timeout on every session start.
+let machineNamePromise = null;
+
+function resolveMachineName() {
+  if (!machineNamePromise) {
+    machineNamePromise = (async () => {
+      const host = process.env.SSH_HOST;
+      if (!net.isIP(host)) return host;
+      try {
+        const names = await dns.promises.reverse(host);
+        return names[0].replace(/\.$/, '');
+      } catch {
+        return host;
+      }
+    })();
+  }
+  return machineNamePromise;
+}
 
 function waitForPort(port, timeoutMs = 8000) {
   const start = Date.now();
@@ -78,4 +103,4 @@ async function getOrStartSession() {
   return session.port;
 }
 
-module.exports = { getOrStartSession };
+module.exports = { getOrStartSession, resolveMachineName };

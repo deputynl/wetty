@@ -3,7 +3,7 @@ const http = require('http');
 const httpProxy = require('http-proxy');
 const path = require('path');
 
-const { getOrStartSession } = require('./sshManager');
+const { getOrStartSession, resolveMachineName } = require('./sshManager');
 
 const PORT = parseInt(process.env.PORT || '8080', 10);
 const app = express();
@@ -20,8 +20,8 @@ proxy.on('error', (err, req, res) => {
 
 app.post('/api/session/start', async (req, res) => {
   try {
-    const port = await getOrStartSession();
-    res.json({ ok: true, port });
+    const [port, machineName] = await Promise.all([getOrStartSession(), resolveMachineName()]);
+    res.json({ ok: true, port, machineName });
   } catch (err) {
     res.status(400).json({ error: err.message });
   }
