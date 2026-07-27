@@ -56,6 +56,33 @@ stays internal and is proxied through the server.
    homelab services - the app only exposes one HTTP port and has no auth of
    its own.
 
+### Using the published image
+
+Skip the local build and pull the prebuilt image from GHCR instead:
+
+```yaml
+services:
+  wetty:
+    image: ghcr.io/deputynl/wetty:latest
+    container_name: wetty
+    ports:
+      - "8080:8080"
+    environment:
+      SSH_HOST: your-host-or-ip
+      SSH_PORT: "22"
+      SSH_USER: your-user
+    volumes:
+      - wetty-ssh:/root/.ssh
+    restart: unless-stopped
+
+volumes:
+  wetty-ssh:
+```
+
+```
+docker compose up -d
+```
+
 ## Environment variables
 
 | Variable   | Default | Description                          |
