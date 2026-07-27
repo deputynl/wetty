@@ -107,17 +107,25 @@ public/vendor/fonts/  vendored DejaVu Sans Mono (no CDN at runtime)
 
 ## Building and publishing an image
 
-There's no CI workflow wired up - images are built and pushed by hand.
-Every push tags the image twice: `latest`, and a UTC build timestamp
-(`yyyymmddhhmmss`) so past versions stay pullable and visible in the GHCR
-version list instead of being silently overwritten:
+There's no CI workflow wired up - images are built and pushed by hand,
+always for both `linux/amd64` and `linux/arm64` via buildx (so the same
+tag works on a homelab x86 box or a Raspberry Pi / Apple Silicon host
+without the puller needing to know or care). Every push tags the image
+twice: `latest`, and a UTC build timestamp (`yyyymmddhhmmss`) so past
+versions stay pullable and visible in the GHCR version list instead of
+being silently overwritten:
 
 ```
+docker buildx create --name wetty-builder --use   # one-time setup
 TS=$(date -u +%Y%m%d%H%M%S)
-docker build -t ghcr.io/<you>/wetty:latest -t ghcr.io/<you>/wetty:$TS .
-docker push ghcr.io/<you>/wetty:latest
-docker push ghcr.io/<you>/wetty:$TS
+docker buildx build --platform linux/amd64,linux/arm64 \
+  -t ghcr.io/<you>/wetty:latest -t ghcr.io/<you>/wetty:$TS \
+  --push .
 ```
+
+(`buildx` cross-builds `arm64` under QEMU emulation, so this works from an
+amd64 host - it's just slower than a native build, mainly on the `npm
+install` and `apt-get` steps.)
 
 The git side mirrors this: every release gets an immutable `yyyymmddhhmmss`
 tag plus a `latest` tag that's force-moved to point at it (same idea as the
