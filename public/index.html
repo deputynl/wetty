@@ -2,77 +2,17 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>Claude Code Hub</title>
+<title>wetty</title>
 <link rel="icon" type="image/svg+xml" href="favicon.svg">
-<link rel="stylesheet" href="vendor/codemirror/lib/codemirror.min.css">
 <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-  <div id="sidebar">
-    <h1>Projects</h1>
-    <ul id="project-list"></ul>
+  <div id="font-size-controls" title="Terminal font size">
+    <button id="font-size-dec" aria-label="Decrease terminal font size">&minus;</button>
+    <span id="font-size-value"></span>
+    <button id="font-size-inc" aria-label="Increase terminal font size">+</button>
   </div>
-
-  <div id="main">
-    <div id="empty-state">Pick a project on the left to get started.</div>
-
-    <div id="project-view" hidden>
-      <div id="tabs">
-        <button class="tab-btn active" data-tab="claude">Claude Code</button>
-        <button class="tab-btn" data-tab="shell">Terminal</button>
-        <button class="tab-btn" data-tab="files">Files</button>
-        <div id="font-size-controls" title="Terminal font size">
-          <button id="font-size-dec" aria-label="Decrease terminal font size">&minus;</button>
-          <span id="font-size-value"></span>
-          <button id="font-size-inc" aria-label="Increase terminal font size">+</button>
-        </div>
-        <span id="current-project"></span>
-      </div>
-
-      <div id="tab-claude" class="tab-panel">
-        <iframe id="claude-frame" title="Claude Code terminal"></iframe>
-      </div>
-
-      <div id="tab-shell" class="tab-panel" hidden>
-        <iframe id="shell-frame" title="Shell terminal"></iframe>
-      </div>
-
-      <div id="tab-files" class="tab-panel" hidden>
-        <div id="file-tree"></div>
-        <div id="file-editor-wrap">
-          <div id="file-toolbar">
-            <span id="file-path">Select a file to view or edit</span>
-            <div id="md-toggle" class="seg-toggle" hidden>
-              <button class="seg-btn active" data-mode="code">Code</button>
-              <button class="seg-btn" data-mode="preview">Preview</button>
-            </div>
-            <button id="download-btn" disabled>Download</button>
-            <button id="save-btn" disabled>Save</button>
-            <span id="save-status"></span>
-          </div>
-          <div id="editor-host">
-            <div id="code-editor"></div>
-            <div id="md-preview" hidden></div>
-          </div>
-        </div>
-      </div>
-    </div>
-  </div>
-
-  <script src="vendor/codemirror/lib/codemirror.min.js"></script>
-  <script src="vendor/codemirror/mode/javascript/javascript.min.js"></script>
-  <script src="vendor/codemirror/mode/css/css.min.js"></script>
-  <script src="vendor/codemirror/mode/xml/xml.min.js"></script>
-  <script src="vendor/codemirror/mode/htmlmixed/htmlmixed.min.js"></script>
-  <script src="vendor/codemirror/mode/markdown/markdown.min.js"></script>
-  <script src="vendor/codemirror/mode/python/python.min.js"></script>
-  <script src="vendor/codemirror/mode/shell/shell.min.js"></script>
-  <script src="vendor/codemirror/mode/yaml/yaml.min.js"></script>
-  <script src="vendor/codemirror/mode/clike/clike.min.js"></script>
-  <script src="vendor/codemirror/mode/sql/sql.min.js"></script>
-  <script src="vendor/codemirror/addon/mode/simple.min.js"></script>
-  <script src="vendor/codemirror/mode/dockerfile/dockerfile.min.js"></script>
-  <script src="vendor/marked.min.js"></script>
+  <iframe id="term-frame" title="Terminal"></iframe>
   <script src="app.js"></script>
 </body>
 </html>

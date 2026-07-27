@@ -1,107 +1,112 @@
-# Claude Code Hub
+# wetty
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Container: ghcr.io](https://img.shields.io/badge/container-ghcr.io%2Fdeputynl%2Fclaudeweb-blue)](https://github.com/deputynl/claudeweb/pkgs/container/claudeweb)
 
-A small self-hosted web UI for Claude Code: mount a folder of projects, get a
-sidebar of them, click one to get a real terminal running `claude` in that
-folder (persistent across dropped connections via tmux), plus a file
-browser/editor tab with syntax highlighting and a Markdown preview. No git
-required, no external project registry — a project is just an immediate
-subfolder of the mounted workspace.
-
-![Screenshot of Claude Code Hub, showing a project sidebar and a Claude Code terminal session (mocked-up demo content)](public/screenshot.png)
+A small self-hosted web UI that gives you one thing: a browser tab with a
+persistent SSH terminal to a host you configure via environment variables.
+Point it at a machine, open the page, and you're connected - reload the tab,
+close your laptop, get on a flaky connection, whatever - the underlying
+session keeps running in `tmux` on the server and you just reattach.
 
 ## How it works
 
-- **Hub app** (`server/index.js`): serves the UI, the project list, the file
-  API, and reverse-proxies terminal traffic (HTTP + WebSocket) to per-project
-  `ttyd` instances it spawns on demand.
-- **Per-project session**: the first time you open a project, the hub runs
-  `ttyd tmux new-session -A -s <project> -c /workspace/<project> claude`.
-  `tmux -A` attaches to an existing session if one's already running, or
-  creates it. That's what makes reconnects (flaky wifi, laptop sleep, closed
-  tab) safe — only the terminal view drops, the `claude` process and its
-  scrollback keep running in tmux until you come back.
-- **Files tab**: a simple read/write API scoped to each project folder
-  (path-traversal guarded), with a tree view and an editor (CodeMirror,
-  vendored locally under `public/vendor/` — no CDN dependency) that
-  syntax-highlights based on file extension. Markdown files get an extra
-  Code/Preview toggle (rendered client-side with `marked.js`, also vendored
-  locally). Save and Download buttons sit in a toolbar above the editor.
+- **Server** (`server/index.js`): a tiny Express app that serves the page
+  and reverse-proxies terminal traffic (HTTP + WebSocket) to a `ttyd`
+  instance it spawns on demand.
+- **Session** (`server/sshManager.js`): on first load, the server runs
+  `ttyd tmux new-session -A -s wetty sh -c '<ssh reconnect loop>'`.
+  - `tmux -A` attaches to the existing session if one's already running, or
+    creates it. That's what makes browser reconnects (flaky wifi, laptop
+    sleep, closed tab) safe - only the terminal view drops, the `ssh`
+    process and its scrollback keep running in `tmux` until you come back.
+  - The reconnect loop re-runs `ssh` if the connection itself drops (not
+    just the browser), so a network blip on the *ssh* link also just gets
+    retried instead of leaving you at a dead shell.
+- **Frontend** (`public/`): a single full-page iframe pointed at the proxied
+  `ttyd` instance, plus a small font-size control. No sidebar, no tabs, no
+  file browser - just the terminal.
 
-Only one port needs to leave the container — everything else (the spawned
-`ttyd` processes) stays internal and is proxied through the hub.
+Only one port needs to leave the container - the `ttyd` process it spawns
+stays internal and is proxied through the server.
 
 ## Setup
 
-1. Edit `docker-compose.yml` and point the `~/dev` volume at wherever your
-   projects actually live. Every immediate subfolder becomes a project in
-   the sidebar.
-2. Auth: the compose file bind-mounts your host user's real `~/.claude`
-   folder and `~/.claude.json` file into the container, so it reuses your
-   already-authenticated Claude Code session instead of logging in fresh.
-   This only carries the login automatically **if the machine running
-   docker compose is Linux (or WSL)** — that's where Claude Code stores its
-   OAuth token in `~/.claude/.credentials.json` on disk. On macOS the token
-   lives in the Keychain instead, so the file mount will bring over your
-   settings but you'll still need to run `claude` once in the terminal tab
-   to log in.
-   - Make sure `~/.claude.json` exists on the host before starting the
-     container (`touch ~/.claude.json` if it doesn't) — Docker will
-     otherwise create it as a directory, which breaks things.
-   - Since this shares one live credentials file between your host CLI and
-     the container, avoid running `claude` from both at the exact same
-     moment during a token refresh; ordinary sequential use is fine.
+1. Edit `docker-compose.yml` (or set these directly in your own
+   orchestration) with the connection details:
+   - `SSH_HOST` - hostname or IP to connect to
+   - `SSH_PORT` - SSH port (defaults to `22`)
+   - `SSH_USER` - remote username
+2. Auth: by default `ssh` will prompt for a password right there in the
+   browser terminal on connect. For passwordless login, mount a private key
+   into the container instead, e.g.:
+   ```yaml
+   volumes:
+     - ~/.ssh/id_ed25519:/root/.ssh/id_ed25519:ro
+     - wetty-ssh:/root/.ssh
+   ```
+   The `wetty-ssh` named volume persists `known_hosts` across container
+   restarts so you're not re-accepting the host key (or, without a mounted
+   key, retyping your password) every single time.
 3. Build and run:
-
    ```
    docker compose up -d --build
    ```
-
-   Or skip the build and pull the prebuilt image instead — swap `build: .`
-   for `image: ghcr.io/deputynl/claudeweb:latest` in `docker-compose.yml`
-   (pinned tags like `ghcr.io/deputynl/claudeweb:20260724145757` are also
-   published for each release, see
-   [Packages](https://github.com/deputynl/claudeweb/pkgs/container/claudeweb)).
-
 4. Open `http://<your-host>:8080`.
-5. Put this behind whatever reverse proxy / IDP you already use for other
-   homelab services — the app only exposes one HTTP port.
+5. Put this behind whatever reverse proxy / auth you already use for other
+   homelab services - the app only exposes one HTTP port and has no auth of
+   its own.
 
-## Known limitations / things to extend later
+## Environment variables
 
-- Syntax highlighting covers common extensions (JS/TS, JSON, CSS, HTML,
-  Markdown, Python, shell, YAML, SQL, C/C++/Java/C#) via a fixed
-  extension-to-mode map in `public/app.js` — anything else falls back to
-  plain text.
-- No idle-timeout/cleanup for `ttyd` child processes yet — they stay running
-  until the container restarts. Fine for a handful of projects; worth adding
-  a reaper if you end up with many.
-- New subfolders added to the workspace appear next time you reload the
-  project list (no filesystem watcher yet).
-- Binary/large files aren't handled in the editor (there's a 2MB cap).
-- The Dockerfile installs Claude Code via the native installer
-  (`curl -fsSL https://claude.ai/install.sh | bash`), landing at
-  `~/.local/bin/claude`. This has to match how you installed it on your
-  **host**, since the bind-mounted `~/.claude.json` records that expected
-  path. If your host used `npm install -g @anthropic-ai/claude-code`
-  instead, switch the Dockerfile back to the npm install line, or run
-  `which -a claude` / `claude doctor` on the host to confirm which method
-  it's using before matching it in the Dockerfile.
+| Variable   | Default | Description                          |
+|------------|---------|---------------------------------------|
+| `SSH_HOST` | -       | Required. Host to connect to.         |
+| `SSH_USER` | -       | Required. Remote username.            |
+| `SSH_PORT` | `22`    | Remote SSH port.                      |
+| `PORT`     | `8080`  | HTTP port the web UI listens on.      |
+| `TTYD_PORT`| `7681`  | Internal port `ttyd` binds to.        |
 
 ## Files
 
 ```
-Dockerfile           node + ttyd + tmux + claude code
-docker-compose.yml   volumes: your dev folder, and a volume for claude auth state
-tmux.conf            mouse + scrollback settings for the persistent sessions
-server/index.js      express app: static UI, APIs, http+ws proxy to ttyd
-server/ttydManager.js   spawns/tracks one ttyd+tmux+claude process per project
-server/fileApi.js    scoped file tree/read/write with path-traversal guards
+Dockerfile           node + ttyd + tmux + openssh-client
+docker-compose.yml   env vars for the target host, volume for known_hosts/keys
+tmux.conf            mouse + scrollback settings for the persistent session
+server/index.js      express app: static UI, http+ws proxy to ttyd
+server/sshManager.js spawns/tracks the ttyd+tmux+ssh process
 public/              vanilla JS/HTML/CSS frontend (no build step)
-public/vendor/       locally vendored CodeMirror + marked.js (no CDN at runtime)
+public/vendor/fonts/  vendored DejaVu Sans Mono (no CDN at runtime)
 ```
+
+## Building and publishing an image
+
+There's no CI workflow wired up - images are built and pushed by hand:
+
+```
+docker build -t ghcr.io/<you>/wetty:latest .
+docker push ghcr.io/<you>/wetty:latest
+```
+
+For a new GitHub repo from scratch:
+
+```
+git init
+git add -A
+git commit -m "Initial commit"
+gh repo create <you>/wetty --public --source=. --push
+```
+
+(swap `--public` for `--private` as you prefer; `gh auth login` first if
+you haven't authenticated the `gh` CLI yet.)
+
+## Known limitations
+
+- No auth of its own - anyone who can reach the HTTP port can open the
+  terminal. Put it behind a reverse proxy / VPN / IDP.
+- Single target per deployment - run another container (different `PORT`,
+  different env vars) if you want to reach a second host.
+- No idle-timeout/cleanup for the `ttyd` process - it stays running until
+  the container restarts.
 
 ## License
 

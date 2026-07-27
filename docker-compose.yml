@@ -1,17 +1,23 @@
 services:
-  claude-web:
+  wetty:
     build: .
-    container_name: claude-web
-    network_mode: lsio
+    container_name: wetty
     ports:
-      - "8180:8080"
+      - "8080:8080"
+    environment:
+      # The machine wetty connects to on load - edit these for your target.
+      SSH_HOST: your-host-or-ip
+      SSH_PORT: "22"
+      SSH_USER: your-user
     volumes:
-      # Change the left side to your actual dev folder.
-      # Each immediate subfolder in here becomes a "project" in the UI.
-      - ~/develop:/workspace
-      # Bind-mount your host user's actual Claude Code config/credentials
-      # instead of a fresh named volume, so the container reuses your
-      # already-authenticated session. Linux/WSL host only - see README.
-      - ~/.claude:/root/.claude
-      - ~/.claude.json:/root/.claude.json
+      # Persists known_hosts (and lets you drop in a private key + ssh
+      # config) across container restarts, so you're not re-accepting the
+      # host key or retyping a passphrase from scratch every time. Mount a
+      # real key here (e.g. - ~/.ssh/id_ed25519:/root/.ssh/id_ed25519:ro) for
+      # passwordless login; otherwise ssh will prompt for a password in the
+      # terminal itself on first connect.
+      - wetty-ssh:/root/.ssh
     restart: unless-stopped
+
+volumes:
+  wetty-ssh:

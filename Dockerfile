@@ -1,13 +1,13 @@
 FROM node:20-slim
 
-LABEL org.opencontainers.image.source="https://github.com/deputynl/claudeweb"
-LABEL org.opencontainers.image.description="A small self-hosted web UI for Claude Code"
+LABEL org.opencontainers.image.source="https://github.com/deputynl/wetty"
+LABEL org.opencontainers.image.description="A persistent SSH terminal in the browser (ttyd + tmux) that survives dropped connections"
 LABEL org.opencontainers.image.licenses="MIT"
 
 ARG TARGETARCH
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      curl ca-certificates tmux openssh-client nano \
+      curl ca-certificates tmux openssh-client \
     && case "${TARGETARCH}" in \
          amd64) TTYD_ARCH=x86_64 ;; \
          arm64) TTYD_ARCH=aarch64 ;; \
@@ -15,14 +15,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
        esac \
     && curl -fsSL "https://github.com/tsl0922/ttyd/releases/latest/download/ttyd.${TTYD_ARCH}" -o /usr/local/bin/ttyd \
     && chmod +x /usr/local/bin/ttyd \
-    && curl -fsSL https://claude.ai/install.sh | bash \
     && rm -rf /var/lib/apt/lists/*
-
-# The native installer puts the binary in ~/.local/bin, which is what your
-# host's ~/.claude.json expects if you installed Claude Code the same way
-# there. This must be set explicitly since Docker RUN/CMD don't source
-# .bashrc, where the installer normally appends this.
-ENV PATH="/root/.local/bin:${PATH}"
 
 WORKDIR /app
 
@@ -33,9 +26,8 @@ COPY server ./server
 COPY public ./public
 COPY tmux.conf /etc/tmux.conf
 
-ENV WORKSPACE_DIR=/workspace
 ENV PORT=8080
-ENV TTYD_PORT_BASE=7700
+ENV TTYD_PORT=7681
 
 EXPOSE 8080
 CMD ["node", "server/index.js"]
