@@ -119,6 +119,20 @@ docker push ghcr.io/<you>/wetty:latest
 docker push ghcr.io/<you>/wetty:$TS
 ```
 
+The git side mirrors this: every release gets an immutable `yyyymmddhhmmss`
+tag plus a `latest` tag that's force-moved to point at it (same idea as the
+image's `latest`, so it needs `--force` since it's overwriting where the
+tag used to point):
+
+```
+TS=$(date -u +%Y%m%d%H%M%S)
+git tag -a "$TS" -m "$TS" HEAD
+git push origin "$TS"
+git tag -f latest HEAD
+git push origin latest --force
+gh release create "$TS" --title "$TS" --notes "..."
+```
+
 For a new GitHub repo from scratch:
 
 ```
