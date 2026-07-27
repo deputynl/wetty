@@ -131,7 +131,7 @@ styleTerminalFrame(termFrame);
 const FONT_SIZE_KEY = 'wetty.terminalFontSize';
 const FONT_SIZE_MIN = 10;
 const FONT_SIZE_MAX = 28;
-const FONT_SIZE_DEFAULT = 16;
+const FONT_SIZE_DEFAULT = 12;
 const FONT_SIZE_STEP = 2;
 
 function getFontSize() {
