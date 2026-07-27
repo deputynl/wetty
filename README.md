@@ -107,11 +107,16 @@ public/vendor/fonts/  vendored DejaVu Sans Mono (no CDN at runtime)
 
 ## Building and publishing an image
 
-There's no CI workflow wired up - images are built and pushed by hand:
+There's no CI workflow wired up - images are built and pushed by hand.
+Every push tags the image twice: `latest`, and a UTC build timestamp
+(`yyyymmddhhmmss`) so past versions stay pullable and visible in the GHCR
+version list instead of being silently overwritten:
 
 ```
-docker build -t ghcr.io/<you>/wetty:latest .
+TS=$(date -u +%Y%m%d%H%M%S)
+docker build -t ghcr.io/<you>/wetty:latest -t ghcr.io/<you>/wetty:$TS .
 docker push ghcr.io/<you>/wetty:latest
+docker push ghcr.io/<you>/wetty:$TS
 ```
 
 For a new GitHub repo from scratch:
