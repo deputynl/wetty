@@ -130,14 +130,30 @@ styleTerminalFrame(termFrame);
 // exposed on the iframe's window.
 const FONT_SIZE_DEFAULT = 12;
 
+// Cache-busted so re-assigning termFrame.src after a close actually
+// navigates the iframe again - an unchanged src is a no-op in browsers.
 function terminalUrl() {
-  return `/term/?fontSize=${FONT_SIZE_DEFAULT}`;
+  return `/term/?fontSize=${FONT_SIZE_DEFAULT}&_=${Date.now()}`;
 }
 
 // Kick off (or reattach to) the tmux/ssh session, then point the iframe at it.
-(async function start() {
+async function startSession() {
   const res = await fetch('/api/session/start', { method: 'POST' });
   const data = await res.json().catch(() => ({}));
-  if (data.machineName) document.title = `${data.machineName} — wetty`;
+  document.title = data.machineName ? `${data.machineName} — wetty` : 'wetty';
   termFrame.src = terminalUrl();
-})();
+}
+
+// Kills the actual tmux session (see server/sshManager.js closeSession) so
+// the ssh reconnect loop backing it stops instead of just detaching, then
+// re-runs startSession so the iframe comes back as a genuinely fresh login
+// rather than ttyd/tmux resurrecting the old one.
+async function closeConnection() {
+  if (!confirm('Close the connection? This ends the current session.')) return;
+  await fetch('/api/session/close', { method: 'POST' });
+  await startSession();
+}
+
+document.getElementById('close-btn').addEventListener('click', closeConnection);
+
+startSession();

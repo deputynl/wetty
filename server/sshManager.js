@@ -1,8 +1,13 @@
-const { spawn } = require('child_process');
+const { spawn, execFile } = require('child_process');
+const { promisify } = require('util');
 const net = require('net');
 const dns = require('dns');
 
+const execFileAsync = promisify(execFile);
+
 const TTYD_PORT = parseInt(process.env.TTYD_PORT || '7681', 10);
+const TMUX_CONF = '/etc/tmux.conf';
+const TMUX_SESSION = 'wetty';
 
 // The reconnect loop runs as a shell script (not string-interpolated) so
 // SSH_HOST/SSH_PORT/SSH_USER reach it as inherited env vars rather than
@@ -79,7 +84,7 @@ async function getOrStartSession() {
     // ttyd drops everything after the first comma in a -t value, so no
     // ", monospace" fallback here - it would be a no-op.
     '-t', "fontFamily='DejaVu Sans Mono'",
-    'tmux', '-f', '/etc/tmux.conf', 'new-session', '-A', '-s', 'wetty',
+    'tmux', '-f', TMUX_CONF, 'new-session', '-A', '-s', TMUX_SESSION,
     'sh', '-c', RECONNECT_SCRIPT,
   ], {
     stdio: 'inherit',
@@ -103,4 +108,22 @@ async function getOrStartSession() {
   return session.port;
 }
 
-module.exports = { getOrStartSession, resolveMachineName };
+// Kills the tmux session outright (not just the client attached to it via
+// ttyd), which is what actually ends the reconnect loop and the ssh
+// connection it's driving - detaching, or just killing ttyd's pty, would
+// leave the `while true` loop in sshManager's RECONNECT_SCRIPT running
+// server-side, so `tmux new-session -A` on the next login would just
+// re-attach to the same still-open connection instead of starting fresh.
+// ttyd itself is left running: it's a long-lived process that spawns a new
+// tmux client per websocket connection, so there's nothing to restart there
+// - the next `/term/` connection will have tmux create a brand new session
+// since the old one is gone.
+async function closeSession() {
+  try {
+    await execFileAsync('tmux', ['-f', TMUX_CONF, 'kill-session', '-t', TMUX_SESSION]);
+  } catch {
+    // No session running - already effectively closed.
+  }
+}
+
+module.exports = { getOrStartSession, resolveMachineName, closeSession };

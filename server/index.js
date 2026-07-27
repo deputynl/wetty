@@ -3,7 +3,7 @@ const http = require('http');
 const httpProxy = require('http-proxy');
 const path = require('path');
 
-const { getOrStartSession, resolveMachineName } = require('./sshManager');
+const { getOrStartSession, resolveMachineName, closeSession } = require('./sshManager');
 
 const PORT = parseInt(process.env.PORT || '8080', 10);
 const app = express();
@@ -25,6 +25,11 @@ app.post('/api/session/start', async (req, res) => {
   } catch (err) {
     res.status(400).json({ error: err.message });
   }
+});
+
+app.post('/api/session/close', async (req, res) => {
+  await closeSession();
+  res.json({ ok: true });
 });
 
 // /term/... -> the ttyd instance running the ssh session
