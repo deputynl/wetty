@@ -31,7 +31,27 @@ const ALLOW_REMOTE_SESSIONS = process.env.ALLOW_REMOTE_SESSIONS === 'true';
 // itself keeps retrying so a dropped *ssh* connection (flaky wifi, laptop
 // sleep) doesn't strand you at a dead shell either - it just prints a
 // reconnect notice and tries again.
-const RECONNECT_SCRIPT = `while true; do
+//
+// The `tmux set-option default-command ...` line makes a mouse-driven split
+// or new-window (the pane menu in tmux.conf, or Ctrl-b %/"/c) reconnect to
+// this same target too, instead of dropping to a plain local shell - it's
+// a *session*-scoped option, set from inside the very session it applies
+// to (tmux always resolves `set-option` without `-t` to "the current
+// session"), which sidesteps needing a separate server-side call timed
+// against a session that may not exist yet (ttyd only actually creates it
+// once a browser client connects).
+//
+// This line runs through two different shells, deliberately: $1/$2/$3 are
+// expanded *now*, by the shell running this script, into a plain string
+// with the target baked in literally - the single quotes around '$1@$2'
+// are NOT parsed as quoting at this stage (they're just literal characters
+// inside an already-double-quoted argument) and end up embedded verbatim
+// in the stored default-command value. They start doing real quoting only
+// the *second* time this text is parsed - as a shell command in its own
+// right, by whatever shell tmux later runs default-command through for a
+// new pane.
+const RECONNECT_SCRIPT = `tmux set-option default-command "while true; do ssh -p $3 -o StrictHostKeyChecking=accept-new -o ServerAliveInterval=15 -o ServerAliveCountMax=3 '$1@$2'; echo; echo '[wetty] connection closed, reconnecting in 3s... (Ctrl-C to cancel this attempt)'; sleep 3; done"
+while true; do
   ssh -p "$3" -o StrictHostKeyChecking=accept-new -o ServerAliveInterval=15 -o ServerAliveCountMax=3 "$1@$2"
   echo
   echo "[wetty] connection closed, reconnecting in 3s... (Ctrl-C to cancel this attempt)"
