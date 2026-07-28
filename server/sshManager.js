@@ -95,7 +95,13 @@ async function getOrStartSession() {
     // node:20-slim has no locale configured at all (`locale -a` only lists
     // C/C.utf8/POSIX) and doesn't need one installed - C.utf8 is already
     // there, just unused by default.
-    env: { ...process.env, LANG: 'C.UTF-8', LC_ALL: 'C.UTF-8' },
+    //
+    // COLORTERM=truecolor is what tmux checks (alongside the outer TERM's
+    // terminfo) to decide whether to advertise 24-bit "Tc"/"RGB" color to
+    // apps running inside it - without it, tmux falls back to 256-color
+    // even though xterm.js and the escape codes flowing through it both
+    // support full RGB.
+    env: { ...process.env, LANG: 'C.UTF-8', LC_ALL: 'C.UTF-8', COLORTERM: 'truecolor' },
   });
 
   proc.on('exit', (code) => {
