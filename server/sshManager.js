@@ -17,13 +17,22 @@ const DEFAULT_ID = 'default';
 const ALLOW_REMOTE_SESSIONS = process.env.ALLOW_REMOTE_SESSIONS === 'true';
 
 // The reconnect loop runs as a shell script (not string-interpolated) so
-// SSH_HOST/SSH_PORT/SSH_USER reach it as inherited env vars rather than
-// needing to be spliced into a command string. tmux keeps this pane alive
-// across dropped *browser* connections; the loop itself keeps retrying so a
-// dropped *ssh* connection (flaky wifi, laptop sleep) doesn't strand you at
-// a dead shell either - it just prints a reconnect notice and tries again.
+// the target reaches it as positional args ($1/$2/$3) rather than needing
+// to be spliced into a command string. Args, not env vars: tmux's *server*
+// (already running after the first session) forks every later pane using
+// the environment it captured at server-start time, not the environment of
+// whatever client just asked for a new session - so a second session's own
+// SSH_HOST/SSH_PORT/SSH_USER env vars are silently ignored in favor of the
+// first session's, and it connects to the wrong host. Positional args don't
+// have this problem: they're part of the `new-session ... sh -c script arg
+// arg arg` command itself, which is per-invocation regardless of the
+// server's cached environment.
+// tmux keeps this pane alive across dropped *browser* connections; the loop
+// itself keeps retrying so a dropped *ssh* connection (flaky wifi, laptop
+// sleep) doesn't strand you at a dead shell either - it just prints a
+// reconnect notice and tries again.
 const RECONNECT_SCRIPT = `while true; do
-  ssh -p "$SSH_PORT" -o StrictHostKeyChecking=accept-new -o ServerAliveInterval=15 -o ServerAliveCountMax=3 "$SSH_USER@$SSH_HOST"
+  ssh -p "$3" -o StrictHostKeyChecking=accept-new -o ServerAliveInterval=15 -o ServerAliveCountMax=3 "$1@$2"
   echo
   echo "[wetty] connection closed, reconnecting in 3s... (Ctrl-C to cancel this attempt)"
   sleep 3
@@ -63,8 +72,8 @@ const HOST_RE = /^[a-zA-Z0-9](?:[a-zA-Z0-9.:-]{0,253}[a-zA-Z0-9])?$/;
 
 // Values come from the browser now (not just trusted env vars), so they're
 // validated before ever reaching a spawned process - and even then, only
-// ever passed via env vars to `ssh`/the reconnect script, never interpolated
-// into a command string.
+// ever passed as argv elements to `ssh`/the reconnect script, never
+// interpolated into a command string.
 function validateTarget({ username, host, port }) {
   if (typeof username !== 'string' || !USERNAME_RE.test(username)) {
     throw new Error('Invalid username');
@@ -125,7 +134,7 @@ async function spawnSession(sessionId, tmuxSession, target) {
     // ", monospace" fallback here - it would be a no-op.
     '-t', "fontFamily='DejaVu Sans Mono'",
     'tmux', '-f', TMUX_CONF, 'new-session', '-A', '-s', tmuxSession,
-    'sh', '-c', RECONNECT_SCRIPT,
+    'sh', '-c', RECONNECT_SCRIPT, 'wetty-ssh', target.username, target.host, String(target.port),
   ], {
     stdio: 'inherit',
     // Without a UTF-8 locale, curses apps (htop, vim, tmux itself, ...) can't
@@ -143,9 +152,6 @@ async function spawnSession(sessionId, tmuxSession, target) {
     // support full RGB.
     env: {
       ...process.env,
-      SSH_HOST: target.host,
-      SSH_PORT: String(target.port),
-      SSH_USER: target.username,
       LANG: 'C.UTF-8',
       LC_ALL: 'C.UTF-8',
       COLORTERM: 'truecolor',
