@@ -61,6 +61,15 @@ function styleTerminalFrame(iframe) {
     `;
     doc.head.appendChild(style);
 
+    // ttyd's frontend never calls preventDefault() on 'contextmenu' itself -
+    // tmux's own pane menu (bound to right-click via mouse mode, see
+    // tmux.conf) arrives separately over the mouse-reporting protocol as
+    // terminal content, not as this DOM event - so without this, the
+    // browser's native menu opens right on top of it. This only needs to
+    // stop the browser's default action; it doesn't touch mousedown/mouseup,
+    // which is what actually carries the click through to tmux.
+    doc.addEventListener('contextmenu', (e) => e.preventDefault());
+
     // xterm.js (inside ttyd's iframe) measures its own cell/column metrics
     // against whatever font is actually loaded at that moment, which can
     // race ahead of the @font-face fetch above - especially over a real
