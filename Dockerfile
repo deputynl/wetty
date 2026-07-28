@@ -1,4 +1,4 @@
-FROM node:20-slim
+FROM node:24-slim
 
 LABEL org.opencontainers.image.source="https://github.com/deputynl/wetty"
 LABEL org.opencontainers.image.description="A persistent SSH terminal in the browser (ttyd + tmux) that survives dropped connections"
