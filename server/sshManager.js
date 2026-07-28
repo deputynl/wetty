@@ -1,13 +1,20 @@
 const { spawn, execFile } = require('child_process');
 const { promisify } = require('util');
+const crypto = require('crypto');
 const net = require('net');
 const dns = require('dns');
 
 const execFileAsync = promisify(execFile);
 
-const TTYD_PORT = parseInt(process.env.TTYD_PORT || '7681', 10);
 const TMUX_CONF = '/etc/tmux.conf';
 const TMUX_SESSION = 'wetty';
+const DEFAULT_ID = 'default';
+
+// Off by default: with no remote sessions allowed, the only thing the "add
+// session" UI can do is open more copies of the one configured target -
+// this app doesn't become a general-purpose SSH jump box just because a
+// browser can reach it, unless an operator opts into that explicitly.
+const ALLOW_REMOTE_SESSIONS = process.env.ALLOW_REMOTE_SESSIONS === 'true';
 
 // The reconnect loop runs as a shell script (not string-interpolated) so
 // SSH_HOST/SSH_PORT/SSH_USER reach it as inherited env vars rather than
@@ -22,20 +29,20 @@ const RECONNECT_SCRIPT = `while true; do
   sleep 3
 done`;
 
-let session = null; // { proc }
+// id -> { id, proc, ttydPort, tmuxSession, username, host, port }
+const sessions = new Map();
 
 // SSH_HOST is often an IP in homelab setups; PTR-resolve it to a real
 // hostname for display (e.g. the browser tab) so the tab reads "nas" rather
-// than "192.168.1.50". Falls back to SSH_HOST itself - unchanged if it's
-// already a hostname, or if there's no PTR record for the IP. Cached since
-// it won't change for the life of the process and a missing PTR record
-// would otherwise mean a fresh (slow) DNS timeout on every session start.
-let machineNamePromise = null;
+// than "192.168.1.50". Falls back to the host itself - unchanged if it's
+// already a hostname, or if there's no PTR record for the IP. Cached per
+// host since it won't change for the life of the process and a missing PTR
+// record would otherwise mean a fresh (slow) DNS timeout on every connect.
+const machineNameCache = new Map();
 
-function resolveMachineName() {
-  if (!machineNamePromise) {
-    machineNamePromise = (async () => {
-      const host = process.env.SSH_HOST;
+function resolveMachineName(host) {
+  if (!machineNameCache.has(host)) {
+    machineNameCache.set(host, (async () => {
       if (!net.isIP(host)) return host;
       try {
         const names = await dns.promises.reverse(host);
@@ -43,9 +50,48 @@ function resolveMachineName() {
       } catch {
         return host;
       }
-    })();
+    })());
   }
-  return machineNamePromise;
+  return machineNameCache.get(host);
+}
+
+const USERNAME_RE = /^[a-zA-Z0-9._-]{1,64}$/;
+// Hostname or IPv4/IPv6 literal. Not exhaustive DNS-label validation - just
+// enough to reject shell/command-injection-relevant characters, since these
+// values ultimately reach `ssh` via env vars.
+const HOST_RE = /^[a-zA-Z0-9](?:[a-zA-Z0-9.:-]{0,253}[a-zA-Z0-9])?$/;
+
+// Values come from the browser now (not just trusted env vars), so they're
+// validated before ever reaching a spawned process - and even then, only
+// ever passed via env vars to `ssh`/the reconnect script, never interpolated
+// into a command string.
+function validateTarget({ username, host, port }) {
+  if (typeof username !== 'string' || !USERNAME_RE.test(username)) {
+    throw new Error('Invalid username');
+  }
+  if (typeof host !== 'string' || !HOST_RE.test(host)) {
+    throw new Error('Invalid host');
+  }
+  const portNum = port === undefined || port === null || port === '' ? 22 : Number(port);
+  if (!Number.isInteger(portNum) || portNum < 1 || portNum > 65535) {
+    throw new Error('Invalid port');
+  }
+  return { username, host, port: portNum };
+}
+
+// Binds to port 0 to let the OS pick a free ephemeral port, then releases it
+// immediately for ttyd to bind - each session gets its own dedicated ttyd
+// process (and therefore its own port) rather than sharing one.
+function getFreePort() {
+  return new Promise((resolve, reject) => {
+    const probe = net.createServer();
+    probe.unref();
+    probe.on('error', reject);
+    probe.listen(0, '127.0.0.1', () => {
+      const { port } = probe.address();
+      probe.close(() => resolve(port));
+    });
+  });
 }
 
 function waitForPort(port, timeoutMs = 8000) {
@@ -64,17 +110,11 @@ function waitForPort(port, timeoutMs = 8000) {
   });
 }
 
-// Returns the local port the ttyd instance is listening on, starting it (and
-// the tmux session wrapping the ssh reconnect loop) if it isn't running yet.
-async function getOrStartSession() {
-  if (session) return session.port;
-
-  if (!process.env.SSH_HOST || !process.env.SSH_USER) {
-    throw new Error('SSH_HOST and SSH_USER environment variables must be set');
-  }
+async function spawnSession(sessionId, tmuxSession, target) {
+  const ttydPort = await getFreePort();
 
   const proc = spawn('ttyd', [
-    '-p', String(TTYD_PORT),
+    '-p', String(ttydPort),
     '-W',
     '-t', 'disableLeaveAlert=true',
     '-t', 'fontSize=16',
@@ -84,7 +124,7 @@ async function getOrStartSession() {
     // ttyd drops everything after the first comma in a -t value, so no
     // ", monospace" fallback here - it would be a no-op.
     '-t', "fontFamily='DejaVu Sans Mono'",
-    'tmux', '-f', TMUX_CONF, 'new-session', '-A', '-s', TMUX_SESSION,
+    'tmux', '-f', TMUX_CONF, 'new-session', '-A', '-s', tmuxSession,
     'sh', '-c', RECONNECT_SCRIPT,
   ], {
     stdio: 'inherit',
@@ -101,35 +141,111 @@ async function getOrStartSession() {
     // apps running inside it - without it, tmux falls back to 256-color
     // even though xterm.js and the escape codes flowing through it both
     // support full RGB.
-    env: { ...process.env, LANG: 'C.UTF-8', LC_ALL: 'C.UTF-8', COLORTERM: 'truecolor' },
+    env: {
+      ...process.env,
+      SSH_HOST: target.host,
+      SSH_PORT: String(target.port),
+      SSH_USER: target.username,
+      LANG: 'C.UTF-8',
+      LC_ALL: 'C.UTF-8',
+      COLORTERM: 'truecolor',
+    },
   });
 
   proc.on('exit', (code) => {
-    console.log(`ttyd exited (code ${code})`);
-    session = null;
+    console.log(`ttyd (session ${sessionId}) exited (code ${code})`);
+    sessions.delete(sessionId);
   });
 
-  session = { port: TTYD_PORT, proc };
-  await waitForPort(TTYD_PORT);
-  return session.port;
+  const entry = { id: sessionId, proc, ttydPort, tmuxSession, ...target };
+  sessions.set(sessionId, entry);
+  await waitForPort(ttydPort);
+  return entry;
+}
+
+function getDefaultTarget() {
+  if (!process.env.SSH_HOST || !process.env.SSH_USER) {
+    throw new Error('SSH_HOST and SSH_USER environment variables must be set');
+  }
+  return validateTarget({
+    username: process.env.SSH_USER,
+    host: process.env.SSH_HOST,
+    port: process.env.SSH_PORT,
+  });
+}
+
+function isDefaultTarget(target) {
+  const def = getDefaultTarget();
+  return target.username === def.username && target.host === def.host && target.port === def.port;
+}
+
+// The one session tied to the env-configured target (SSH_HOST/PORT/USER).
+// Kept under a fixed id and a fixed tmux session name ("wetty", unchanged
+// from before this file supported multiple sessions) so a browser reload
+// reattaches to it via `tmux -A` instead of starting a fresh connection -
+// the property this app has always had for its "main" session. Any other
+// session - including one opened manually to this exact same target - gets
+// its own random id/tmux name via createSession() below instead, so it's
+// independent and won't be reattached-to by accident.
+async function createDefaultSession() {
+  const existing = sessions.get(DEFAULT_ID);
+  if (existing) return { id: DEFAULT_ID, port: existing.ttydPort, machineName: await resolveMachineName(existing.host) };
+
+  const target = getDefaultTarget();
+  const entry = await spawnSession(DEFAULT_ID, TMUX_SESSION, target);
+  return { id: DEFAULT_ID, port: entry.ttydPort, machineName: await resolveMachineName(target.host) };
+}
+
+// Always starts a brand new, independently-tracked session - even if one
+// already exists for the same username/host/port - so opening the same
+// target twice gives you two separate tmux sessions instead of reattaching
+// to the first. With ALLOW_REMOTE_SESSIONS unset/false, this is restricted
+// to the configured target itself (still lets you open more of those) -
+// this is the actual enforcement point, not just a UI affordance, since the
+// request reaching here came from the browser.
+async function createSession(input) {
+  const target = validateTarget(input || {});
+  if (!ALLOW_REMOTE_SESSIONS && !isDefaultTarget(target)) {
+    throw new Error('Remote sessions are disabled (set ALLOW_REMOTE_SESSIONS=true to allow connecting to other targets)');
+  }
+  const id = crypto.randomBytes(4).toString('hex');
+  const entry = await spawnSession(id, `wetty-${id}`, target);
+  return { id, port: entry.ttydPort, machineName: await resolveMachineName(target.host) };
+}
+
+function getSessionPort(id) {
+  const entry = sessions.get(id);
+  return entry ? entry.ttydPort : null;
 }
 
 // Kills the tmux session outright (not just the client attached to it via
 // ttyd), which is what actually ends the reconnect loop and the ssh
 // connection it's driving - detaching, or just killing ttyd's pty, would
-// leave the `while true` loop in sshManager's RECONNECT_SCRIPT running
-// server-side, so `tmux new-session -A` on the next login would just
-// re-attach to the same still-open connection instead of starting fresh.
-// ttyd itself is left running: it's a long-lived process that spawns a new
-// tmux client per websocket connection, so there's nothing to restart there
-// - the next `/term/` connection will have tmux create a brand new session
-// since the old one is gone.
-async function closeSession() {
+// leave the `while true` loop in RECONNECT_SCRIPT running server-side. The
+// ttyd process itself is also killed here: unlike the old single-shared-ttyd
+// design, each session now has its own dedicated ttyd, so there's nothing
+// else it could still be needed for.
+async function closeSession(id) {
+  const entry = sessions.get(id);
+  if (!entry) return;
   try {
-    await execFileAsync('tmux', ['-f', TMUX_CONF, 'kill-session', '-t', TMUX_SESSION]);
+    await execFileAsync('tmux', ['-f', TMUX_CONF, 'kill-session', '-t', entry.tmuxSession]);
   } catch {
     // No session running - already effectively closed.
   }
+  try {
+    entry.proc.kill();
+  } catch {
+    // Already exited.
+  }
+  sessions.delete(id);
 }
 
-module.exports = { getOrStartSession, resolveMachineName, closeSession };
+module.exports = {
+  createDefaultSession,
+  createSession,
+  getSessionPort,
+  closeSession,
+  resolveMachineName,
+  ALLOW_REMOTE_SESSIONS,
+};

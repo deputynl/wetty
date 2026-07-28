@@ -2,32 +2,44 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-A small self-hosted web UI that gives you one thing: a browser tab with a
-persistent SSH terminal to a host you configure via environment variables.
-Point it at a machine, open the page, and you're connected - reload the tab,
-close your laptop, get on a flaky connection, whatever - the underlying
-session keeps running in `tmux` on the server and you just reattach.
+A small self-hosted web UI for persistent SSH terminals in the browser.
+Point it at a machine via environment variables, open the page, and you're
+connected - reload the tab, close your laptop, get on a flaky connection,
+whatever - the underlying session keeps running in `tmux` on the server and
+you just reattach. From there you can open additional terminals, each with
+its own independent `tmux` session - even a second one to the same target.
+By default those additional terminals are still restricted to the
+configured target; set `ALLOW_REMOTE_SESSIONS=true` to allow opening
+sessions to any other `user@host:port` from the UI too.
 
 ## How it works
 
 - **Server** (`server/index.js`): a tiny Express app that serves the page
-  and reverse-proxies terminal traffic (HTTP + WebSocket) to a `ttyd`
-  instance it spawns on demand.
-- **Session** (`server/sshManager.js`): on first load, the server runs
-  `ttyd tmux new-session -A -s wetty sh -c '<ssh reconnect loop>'`.
-  - `tmux -A` attaches to the existing session if one's already running, or
-    creates it. That's what makes browser reconnects (flaky wifi, laptop
-    sleep, closed tab) safe - only the terminal view drops, the `ssh`
-    process and its scrollback keep running in `tmux` until you come back.
-  - The reconnect loop re-runs `ssh` if the connection itself drops (not
-    just the browser), so a network blip on the *ssh* link also just gets
-    retried instead of leaving you at a dead shell.
-- **Frontend** (`public/`): a single full-page iframe pointed at the proxied
-  `ttyd` instance, plus a small font-size control. No sidebar, no tabs, no
-  file browser - just the terminal.
+  and reverse-proxies terminal traffic (HTTP + WebSocket), per session, to
+  the `ttyd` instance backing it.
+- **Sessions** (`server/sshManager.js`): each open terminal gets its own
+  `ttyd tmux new-session -A -s <name> sh -c '<ssh reconnect loop>'`, on its
+  own locally-allocated port.
+  - The env-configured session (`SSH_HOST`/`SSH_PORT`/`SSH_USER`) always
+    uses a fixed tmux session name, so a page reload reattaches to it via
+    `tmux -A` instead of starting fresh - only the terminal view drops on a
+    browser disconnect (flaky wifi, laptop sleep, closed tab), not the `ssh`
+    process or its scrollback. Any other session - opened by hand from the
+    UI - gets its own independent tmux session instead, even if it's to the
+    same target, so it won't be reattached-to by accident.
+  - The reconnect loop inside each session re-runs `ssh` if the connection
+    itself drops (not just the browser), so a network blip on the *ssh*
+    link also just gets retried instead of leaving you at a dead shell.
+- **Frontend** (`public/`): one full-page iframe per open terminal, proxied
+  to its `ttyd` instance. A small "+"/"×" control lets you add or close
+  sessions; a minimal tab bar appears only once a second terminal is open,
+  and disappears again once you're back down to one. Connection details you
+  enter (`user@host[:port]`) are remembered in the browser's local storage
+  for one-click reopening, with the env-configured target always pinned at
+  the top of that list.
 
-Only one port needs to leave the container - the `ttyd` process it spawns
-stays internal and is proxied through the server.
+Only one port needs to leave the container - the `ttyd` processes it spawns
+stay internal and are proxied through the server.
 
 ## Setup
 
@@ -87,11 +99,21 @@ docker compose up -d
 
 | Variable   | Default | Description                          |
 |------------|---------|---------------------------------------|
-| `SSH_HOST` | -       | Required. Host to connect to.         |
-| `SSH_USER` | -       | Required. Remote username.            |
-| `SSH_PORT` | `22`    | Remote SSH port.                      |
-| `PORT`     | `8080`  | HTTP port the web UI listens on.      |
-| `TTYD_PORT`| `7681`  | Internal port `ttyd` binds to.        |
+| `SSH_HOST`              | -       | Required. Default host to connect to.  |
+| `SSH_USER`              | -       | Required. Default remote username.     |
+| `SSH_PORT`              | `22`    | Default remote SSH port.               |
+| `PORT`                  | `8080`  | HTTP port the web UI listens on.       |
+| `ALLOW_REMOTE_SESSIONS` | `false` | Allow opening sessions to targets other than the configured one - see below. |
+
+`SSH_HOST`/`SSH_USER`/`SSH_PORT` are the *default* target: opened
+automatically on load and pinned at the top of the connection list. By
+default that's also the *only* target the UI can open - the "+" control
+lets you start additional sessions to it (each an independent `tmux`
+session, so you can have several terminals to the same box at once), but
+the free-text `user@host[:port]` field and any other-host history entries
+are hidden. Set `ALLOW_REMOTE_SESSIONS=true` to turn this into a general
+jump box that can open a session to any host it can reach - see "Known
+limitations" below before doing that on anything internet-facing.
 
 ## Files
 
@@ -155,12 +177,12 @@ you haven't authenticated the `gh` CLI yet.)
 
 ## Known limitations
 
-- No auth of its own - anyone who can reach the HTTP port can open the
-  terminal. Put it behind a reverse proxy / VPN / IDP.
-- Single target per deployment - run another container (different `PORT`,
-  different env vars) if you want to reach a second host.
-- No idle-timeout/cleanup for the `ttyd` process - it stays running until
-  the container restarts.
+- No auth of its own - anyone who can reach the HTTP port can open a
+  terminal to the configured default target (and, with
+  `ALLOW_REMOTE_SESSIONS=true`, anywhere else it can reach). Put it behind a
+  reverse proxy / VPN / IDP.
+- No idle-timeout/cleanup for `ttyd` processes - each stays running until
+  its session is closed from the UI or the container restarts.
 
 ## License
 

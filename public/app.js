@@ -1,6 +1,6 @@
-// ttyd serves its own document into this iframe, but same-origin (proxied
-// through /term/) means we can reach into it and inject our own styling:
-// scrollbars to match the rest of the app, and a @font-face for the
+// ttyd serves its own document into each iframe, but same-origin (proxied
+// through /term/<id>/) means we can reach into it and inject our own
+// styling: scrollbars to match the rest of the app, and a @font-face for the
 // terminal font. The latter matters because ttyd is started with
 // fontFamily='DejaVu Sans Mono' (see server/sshManager.js) but that name is
 // only meaningful if the same font is actually loaded in this document -
@@ -119,9 +119,6 @@ function styleTerminalFrame(iframe) {
   });
 }
 
-const termFrame = document.getElementById('term-frame');
-styleTerminalFrame(termFrame);
-
 // --- Terminal font size ---
 // ttyd reads `fontSize` (and other ITerminalOptions keys) from the iframe
 // URL's query string as a per-client override - see parseOptsFromUrlQuery in
@@ -130,30 +127,285 @@ styleTerminalFrame(termFrame);
 // exposed on the iframe's window.
 const FONT_SIZE_DEFAULT = 12;
 
-// Cache-busted so re-assigning termFrame.src after a close actually
-// navigates the iframe again - an unchanged src is a no-op in browsers.
-function terminalUrl() {
-  return `/term/?fontSize=${FONT_SIZE_DEFAULT}&_=${Date.now()}`;
+// Cache-busted so a re-used id (shouldn't normally happen, but keeps this
+// robust) actually navigates the iframe rather than being a no-op src set.
+function terminalUrl(id) {
+  return `/term/${id}/?fontSize=${FONT_SIZE_DEFAULT}&_=${Date.now()}`;
 }
 
-// Kick off (or reattach to) the tmux/ssh session, then point the iframe at it.
-async function startSession() {
-  const res = await fetch('/api/session/start', { method: 'POST' });
+// --- Open-session state ---
+// tabs: [{ id, username, host, port, machineName, iframe }]
+const tabs = [];
+let activeId = null;
+
+const terminalsEl = document.getElementById('terminals');
+const tabBarEl = document.getElementById('tab-bar');
+const controlsEl = document.getElementById('controls');
+
+function createIframeForTab(id) {
+  const iframe = document.createElement('iframe');
+  iframe.className = 'term-frame';
+  iframe.title = 'Terminal';
+  iframe.src = terminalUrl(id);
+  styleTerminalFrame(iframe);
+  terminalsEl.appendChild(iframe);
+  return iframe;
+}
+
+function findTab(id) {
+  return tabs.find((t) => t.id === id);
+}
+
+function addTab(info) {
+  const iframe = createIframeForTab(info.id);
+  tabs.push({ ...info, iframe });
+  setActive(info.id);
+}
+
+function setActive(id) {
+  activeId = id;
+  tabs.forEach((t) => t.iframe.classList.toggle('active', t.id === id));
+  const t = findTab(id);
+  document.title = t && t.machineName ? `${t.machineName} — wetty` : 'wetty';
+  render();
+}
+
+// Ends the given session server-side and drops its tab/iframe. If that was
+// the last one left, a totally blank app would have nowhere for the user to
+// go, so the default session is reopened automatically - the same "closing
+// always leaves you with a working terminal" behavior this app has always
+// had, just now scoped to the empty-tabs edge case instead of every close.
+async function removeTab(id) {
+  const idx = tabs.findIndex((t) => t.id === id);
+  if (idx === -1) return;
+  const [removed] = tabs.splice(idx, 1);
+  removed.iframe.remove();
+  fetch(`/api/sessions/${id}`, { method: 'DELETE' }).catch(() => {});
+
+  if (tabs.length === 0) {
+    await openDefaultSession();
+  } else if (activeId === id) {
+    setActive(tabs[Math.max(0, idx - 1)].id);
+  } else {
+    render();
+  }
+}
+
+function render() {
+  if (tabs.length < 2) {
+    tabBarEl.hidden = true;
+    tabBarEl.innerHTML = '';
+    document.body.classList.remove('has-tabs');
+    controlsEl.hidden = false;
+    return;
+  }
+
+  document.body.classList.add('has-tabs');
+  controlsEl.hidden = true;
+  tabBarEl.hidden = false;
+  tabBarEl.innerHTML = '';
+
+  tabs.forEach((t, i) => {
+    if (i > 0) {
+      const sep = document.createElement('span');
+      sep.className = 'tab-sep';
+      sep.textContent = '·';
+      tabBarEl.appendChild(sep);
+    }
+
+    const tabEl = document.createElement('span');
+    tabEl.className = 'tab' + (t.id === activeId ? ' active' : '');
+    tabEl.textContent = `${t.username}@${t.host}`;
+    tabEl.addEventListener('click', () => setActive(t.id));
+
+    if (t.id === activeId) {
+      const closeEl = document.createElement('span');
+      closeEl.className = 'tab-close';
+      closeEl.textContent = '×';
+      closeEl.title = 'Close';
+      closeEl.addEventListener('click', (e) => {
+        e.stopPropagation();
+        removeTab(t.id);
+      });
+      tabEl.appendChild(closeEl);
+    }
+
+    tabBarEl.appendChild(tabEl);
+  });
+
+  const addEl = document.createElement('span');
+  addEl.className = 'tab-add';
+  addEl.textContent = '+';
+  addEl.title = 'New session';
+  addEl.addEventListener('click', () => togglePopover());
+  tabBarEl.appendChild(addEl);
+}
+
+// --- Session creation ---
+
+async function openDefaultSession() {
+  const [res, config] = await Promise.all([
+    fetch('/api/sessions/default', { method: 'POST' }),
+    getDefaultConfig(),
+  ]);
   const data = await res.json().catch(() => ({}));
-  document.title = data.machineName ? `${data.machineName} — wetty` : 'wetty';
-  termFrame.src = terminalUrl();
+  if (!data.ok) return;
+  addTab({ id: 'default', ...config, machineName: data.machineName });
 }
 
-// Kills the actual tmux session (see server/sshManager.js closeSession) so
-// the ssh reconnect loop backing it stops instead of just detaching, then
-// re-runs startSession so the iframe comes back as a genuinely fresh login
-// rather than ttyd/tmux resurrecting the old one.
-async function closeConnection() {
+async function openNewSession(target) {
+  const res = await fetch('/api/sessions', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(target),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!data.ok) return;
+  upsertHistory(target);
+  addTab({ id: data.id, ...target, machineName: data.machineName });
+}
+
+let defaultConfigPromise = null;
+function getDefaultConfig() {
+  if (!defaultConfigPromise) {
+    defaultConfigPromise = fetch('/api/config').then((r) => r.json());
+  }
+  return defaultConfigPromise;
+}
+
+// --- History (localStorage) ---
+
+const HISTORY_KEY = 'wetty:connections';
+const HISTORY_LIMIT = 20;
+
+function targetKey(t) {
+  return `${t.username}@${t.host}:${t.port}`;
+}
+
+function loadHistory() {
+  try {
+    return JSON.parse(localStorage.getItem(HISTORY_KEY)) || [];
+  } catch {
+    return [];
+  }
+}
+
+function saveHistory(list) {
+  localStorage.setItem(HISTORY_KEY, JSON.stringify(list));
+}
+
+function upsertHistory(target) {
+  const list = loadHistory().filter((e) => targetKey(e) !== targetKey(target));
+  list.unshift({ ...target, lastUsedAt: Date.now() });
+  saveHistory(list.slice(0, HISTORY_LIMIT));
+}
+
+// --- Add-session popover ---
+
+const popoverEl = document.getElementById('add-popover');
+const inputEl = document.getElementById('add-input');
+const errorEl = document.getElementById('add-error');
+const historyListEl = document.getElementById('history-list');
+
+// user@host[:port] - port optional, defaults to 22.
+const TARGET_RE = /^([a-zA-Z0-9._-]+)@([a-zA-Z0-9.-]+)(?::(\d{1,5}))?$/;
+
+function parseTargetString(str) {
+  const match = str.trim().match(TARGET_RE);
+  if (!match) return null;
+  const port = match[3] ? parseInt(match[3], 10) : 22;
+  if (port < 1 || port > 65535) return null;
+  return { username: match[1], host: match[2], port };
+}
+
+function togglePopover() {
+  if (popoverEl.hidden) openPopover(); else closePopover();
+}
+
+async function openPopover() {
+  popoverEl.hidden = false;
+  errorEl.textContent = '';
+  inputEl.value = '';
+
+  const config = await getDefaultConfig();
+  inputEl.hidden = !config.allowRemoteSessions;
+  errorEl.hidden = !config.allowRemoteSessions;
+
+  await renderHistoryList();
+  if (config.allowRemoteSessions) inputEl.focus();
+}
+
+function closePopover() {
+  popoverEl.hidden = true;
+}
+
+async function renderHistoryList() {
+  historyListEl.innerHTML = '';
+  const config = await getDefaultConfig();
+  const pinnedKey = targetKey(config);
+
+  const pinnedEl = document.createElement('div');
+  pinnedEl.className = 'history-item pinned';
+  pinnedEl.textContent = pinnedKey;
+  pinnedEl.addEventListener('click', async () => {
+    closePopover();
+    await openNewSession(config);
+  });
+  historyListEl.appendChild(pinnedEl);
+
+  // With remote sessions disabled, the pinned row above (repeatable) is the
+  // only thing on offer - no other target, including ones from history, is
+  // reachable through this UI.
+  if (!config.allowRemoteSessions) return;
+
+  // Entries matching the pinned default are skipped here - that target is
+  // already covered by the pinned row above (which itself can be clicked
+  // any number of times to open more sessions to it).
+  loadHistory()
+    .filter((entry) => targetKey(entry) !== pinnedKey)
+    .forEach((entry) => {
+      const el = document.createElement('div');
+      el.className = 'history-item';
+      el.textContent = targetKey(entry);
+      el.addEventListener('click', async () => {
+        closePopover();
+        await openNewSession(entry);
+      });
+      historyListEl.appendChild(el);
+    });
+}
+
+inputEl.addEventListener('keydown', async (e) => {
+  if (e.key !== 'Enter') return;
+  const target = parseTargetString(inputEl.value);
+  if (!target) {
+    errorEl.textContent = 'Expected format: user@host[:port]';
+    return;
+  }
+  closePopover();
+  await openNewSession(target);
+});
+
+document.addEventListener('click', (e) => {
+  if (popoverEl.hidden) return;
+  if (popoverEl.contains(e.target)) return;
+  if (e.target.closest('#add-btn') || e.target.closest('.tab-add')) return;
+  closePopover();
+});
+
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && !popoverEl.hidden) closePopover();
+});
+
+document.getElementById('add-btn').addEventListener('click', () => togglePopover());
+
+// Kills the actual tmux session for the active tab (see closeSession in
+// server/sshManager.js) so the ssh reconnect loop backing it stops instead
+// of just detaching.
+document.getElementById('close-btn').addEventListener('click', async () => {
+  if (!activeId) return;
   if (!confirm('Close the connection? This ends the current session.')) return;
-  await fetch('/api/session/close', { method: 'POST' });
-  await startSession();
-}
+  await removeTab(activeId);
+});
 
-document.getElementById('close-btn').addEventListener('click', closeConnection);
-
-startSession();
+openDefaultSession();

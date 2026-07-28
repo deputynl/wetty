@@ -9,6 +9,10 @@ services:
       SSH_HOST: your-host-or-ip
       SSH_PORT: "22"
       SSH_USER: your-user
+      # Uncomment to let the UI open sessions to hosts other than the one
+      # above - off by default, so the "+" control only offers more
+      # sessions to your configured target.
+      # ALLOW_REMOTE_SESSIONS: "true"
     volumes:
       # Persists known_hosts (and lets you drop in a private key + ssh
       # config) across container restarts, so you're not re-accepting the

@@ -11,8 +11,20 @@
 <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-  <iframe id="term-frame" title="Terminal"></iframe>
-  <button id="close-btn" title="Close connection" aria-label="Close connection">&#10005;</button>
+  <div id="tab-bar" class="tab-bar" hidden></div>
+  <div id="terminals"></div>
+
+  <div id="controls">
+    <button id="add-btn" title="New session" aria-label="New session">+</button>
+    <button id="close-btn" title="Close connection" aria-label="Close connection">&#10005;</button>
+  </div>
+
+  <div id="add-popover" hidden>
+    <input id="add-input" type="text" placeholder="user@host[:port]" autocomplete="off" spellcheck="false">
+    <div id="add-error" class="add-error"></div>
+    <div id="history-list"></div>
+  </div>
+
   <script src="app.js"></script>
 </body>
 </html>

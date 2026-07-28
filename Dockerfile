@@ -27,7 +27,6 @@ COPY public ./public
 COPY tmux.conf /etc/tmux.conf
 
 ENV PORT=8080
-ENV TTYD_PORT=7681
 
 EXPOSE 8080
 CMD ["node", "server/index.js"]
