@@ -31,9 +31,9 @@ sessions to any other `user@host:port` from the UI too.
     itself drops (not just the browser), so a network blip on the *ssh*
     link also just gets retried instead of leaving you at a dead shell.
   - Right-click a pane (mouse mode is on, via `tmux.conf`) for a small
-    curated menu - split, zoom, or close - restyled to roughly match the
-    web UI instead of tmux's default. Splitting or opening a new window
-    reconnects to that same session's target rather than dropping to a
+    curated menu - split, zoom, or close - instead of tmux's full default
+    one. Splitting or opening a new window reconnects to that same
+    session's target rather than dropping to a
     local shell in the container, since each session sets its own
     `default-command` to the same reconnect loop as its initial pane.
 - **Frontend** (`public/`): one full-page iframe per open terminal, proxied
