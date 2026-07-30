@@ -68,7 +68,17 @@ function styleTerminalFrame(iframe) {
     // browser's native menu opens right on top of it. This only needs to
     // stop the browser's default action; it doesn't touch mousedown/mouseup,
     // which is what actually carries the click through to tmux.
-    doc.addEventListener('contextmenu', (e) => e.preventDefault());
+    //
+    // Shift is the escape hatch: xterm.js already treats a Shift-held mouse
+    // event as "bypass the terminal's own mouse handling, let the browser do
+    // its normal thing" (that's what makes Shift-drag select text as a plain
+    // DOM selection instead of feeding tmux's mouse-reporting protocol) - so
+    // Shift-right-click here skips preventDefault too, surfacing the
+    // browser's native menu (with Copy) over that selection instead of
+    // tmux's pane menu.
+    doc.addEventListener('contextmenu', (e) => {
+      if (!e.shiftKey) e.preventDefault();
+    });
 
     // xterm.js (inside ttyd's iframe) measures its own cell/column metrics
     // against whatever font is actually loaded at that moment, which can

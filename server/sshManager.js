@@ -27,10 +27,17 @@ const ALLOW_REMOTE_SESSIONS = process.env.ALLOW_REMOTE_SESSIONS === 'true';
 // have this problem: they're part of the `new-session ... sh -c script arg
 // arg arg` command itself, which is per-invocation regardless of the
 // server's cached environment.
-// tmux keeps this pane alive across dropped *browser* connections; the loop
-// itself keeps retrying so a dropped *ssh* connection (flaky wifi, laptop
-// sleep) doesn't strand you at a dead shell either - it just prints a
-// reconnect notice and tries again.
+// tmux keeps this pane alive across dropped *browser* connections; a dropped
+// *ssh* connection (flaky wifi, laptop sleep, a network blip while nobody's
+// watching) doesn't strand you at a dead shell either - it prints a reconnect
+// notice and waits for a keypress before trying again, rather than retrying
+// on a timer. That wait is deliberate: retrying unattended would open a
+// fresh, unauthenticated ssh connection that just sits there until the
+// remote sshd's LoginGraceTime kills it (~2min default) - if you come back
+// mid-window, you can type your password into a connection that dies right
+// underneath you, then have to enter it again on the next attempt. Gating
+// the retry on Enter means the connection (and its grace-period clock) only
+// opens once you're actually here to answer the password prompt.
 //
 // The `tmux set-option default-command ...` line makes a mouse-driven split
 // or new-window (the pane menu in tmux.conf, or Ctrl-b %/"/c) reconnect to
@@ -50,12 +57,12 @@ const ALLOW_REMOTE_SESSIONS = process.env.ALLOW_REMOTE_SESSIONS === 'true';
 // the *second* time this text is parsed - as a shell command in its own
 // right, by whatever shell tmux later runs default-command through for a
 // new pane.
-const RECONNECT_SCRIPT = `tmux set-option default-command "while true; do ssh -p $3 -o StrictHostKeyChecking=accept-new -o ServerAliveInterval=15 -o ServerAliveCountMax=3 '$1@$2'; echo; echo '[wetty] connection closed, reconnecting in 3s... (Ctrl-C to cancel this attempt)'; sleep 3; done"
+const RECONNECT_SCRIPT = `tmux set-option default-command "while true; do ssh -p $3 -o StrictHostKeyChecking=accept-new -o ServerAliveInterval=15 -o ServerAliveCountMax=3 '$1@$2'; echo; echo '[wetty] connection closed. Press Enter to reconnect...'; read -r _; done"
 while true; do
   ssh -p "$3" -o StrictHostKeyChecking=accept-new -o ServerAliveInterval=15 -o ServerAliveCountMax=3 "$1@$2"
   echo
-  echo "[wetty] connection closed, reconnecting in 3s... (Ctrl-C to cancel this attempt)"
-  sleep 3
+  echo "[wetty] connection closed. Press Enter to reconnect..."
+  read -r _
 done`;
 
 // id -> { id, proc, ttydPort, tmuxSession, username, host, port }
